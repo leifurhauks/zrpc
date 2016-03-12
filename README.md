@@ -49,8 +49,6 @@ Ok. Pulsar gives you the components to easily build and WebSocket RPC handler. H
 import asyncio
 import struct
 
-import aiohttp
-
 from pulsar import as_coroutine, ensure_future
 from pulsar.apps import rpc, ws
 from pulsar.apps.wsgi.utils import LOGGER
