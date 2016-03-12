@@ -26,7 +26,16 @@ If you get a weird error, you may need to run
 ```
 $ sudo ldconfig
 ```
+
 Phew, good to go, now...
+
+Get and run Titan:db:
+```
+$ wget http://s3.thinkaurelius.com/downloads/titan/titan-1.0.0-hadoop1.zip
+$ unzip titan-1.0.0-hadoop1.zip
+$ cd titan-1.0.0-hadoop1/
+$ ./bin/titan.sh start
+```
 
 Install Python package dependencies:
 
@@ -332,6 +341,13 @@ Then open a new terminal and navigate to the zrpc root and run the client:
 ```
 $ cd zrpc
 $ python titan_client.py
+```
+
+Stop Titan:db:
+
+```
+$ cd titan-1.0.0-hadoop1/
+$ ./bin/titan.sh stop
 ```
 
 That's it! These are really basic examples, but they can be as complex as needed...
