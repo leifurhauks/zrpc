@@ -102,7 +102,7 @@ class EchoRPC(WSRPC):
         for x in range(10):
             yield from asyncio.sleep(0.5)
             websocket.write(blob)
-        websocket.write('CLOSE')
+        websocket.write_close()
 
 
 def server():
@@ -120,6 +120,8 @@ This service can be called from any websocket client implementation in any langu
 ```python
 import asyncio
 
+import aiohttp
+
 from wsrpc import WSRPCProxy
 
 
@@ -132,9 +134,9 @@ def client():
         # Basic websocket read pattern...
         while True:
             resp = yield from client.receive()
-            print(resp.data)
-            if resp.data == "CLOSE":
+            if resp.tp == aiohttp.MsgType.close:
                 break
+            print(resp.data)
     # Clean up
     finally:
         yield from client.close()
@@ -256,7 +258,7 @@ class CreatorRPC(WSRPC):
         yield from asyncio.sleep(1)
 
         # Close command
-        websocket.write("CLOSE")
+        websocket.write_close()
 
 
 class TitanRPCSite(wsgi.LazyWsgi):
@@ -312,9 +314,9 @@ def main():
     try:
         while True:
             resp = yield from client.receive()
-            print(resp.data)
-            if resp.data == "CLOSE":
+            if resp.tp == aiohttp.MsgType.close:
                 break
+            print(resp.data)
     # Clean up
     finally:
         yield from client.close()

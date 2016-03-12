@@ -56,7 +56,7 @@ class CreatorRPC(WSRPC):
             websocket.write(str(x))
         websocket.write("GOODBYE")
         yield from asyncio.sleep(1)
-        websocket.write("CLOSE")
+        websocket.write_close()
 
 
 class TitanRPCSite(wsgi.LazyWsgi):

@@ -1,5 +1,7 @@
 import asyncio
 
+import aiohttp
+
 from proto import titan_pb2
 from wsrpc import WSRPCProxy
 
@@ -16,9 +18,9 @@ def main():
     try:
         while True:
             resp = yield from client.receive()
-            print(resp.data)
-            if resp.data == "CLOSE":
+            if resp.tp == aiohttp.MsgType.close:
                 break
+            print(resp.data)
     finally:
         yield from client.close()
         yield from proxy.session.close()

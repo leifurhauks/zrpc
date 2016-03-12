@@ -11,8 +11,7 @@ class EchoRPC(WSRPC):
         for x in range(10):
             yield from asyncio.sleep(0.5)
             websocket.write(blob)
-        websocket.write('CLOSE')
-
+        websocket.write_close()
 
 def server():
     wm = ws.WebSocket('/', EchoRPC())
