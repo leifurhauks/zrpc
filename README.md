@@ -155,7 +155,7 @@ $ cd zrpc
 $ python echo_client.py
 ```
 
-### Using WSRPC with Titan and Protocol Buffers
+### Using WSRPC w/Titan and Protocol Buffers
 
 So let's set up a service that creates vertices of type ``Person`` in Titan:db. Since we will be using Protocol Buffers for serialization, let's define a simple message type person in a `.proto` file called `titan.proto`:
 
