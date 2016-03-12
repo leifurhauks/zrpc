@@ -2,6 +2,8 @@
 
 This example demonstrates how you can use Pulsar to create a websocket based streaming RPC service and proxy that is easy to integrate with data serialized to bytes e.g., Google Protocol Buffers.
 
+### Setup
+
 Install Google Protocol Buffers:
 
 ```
@@ -39,6 +41,8 @@ $ git clone https://github.com/davebshow/zrpc.git
 $ cd zrpc
 ```
 
+### WSRPC
+
 Ok. Pulsar gives you the components to easily build and WebSocket RPC handler. Here is a simple [example](https://github.com/davebshow/zrpc/blob/master/wsrpc.py#L78):
 
 ```python
@@ -61,6 +65,8 @@ class WSRPC(rpc.handlers.RpcHandler, ws.WS):
         proc = self.get_handler(method.decode('utf-8'))
         yield from as_coroutine(proc(websocket, blob))
 ```
+
+### WSRCP Echo Server
 
 You can then inherit from this class to create a custom WSRPC handler. Here is a simple echo server:
 
@@ -139,7 +145,7 @@ $ cd zrpc
 $ python echo_client.py
 ```
 
-### Using WSRPC with Protocol Buffers
+### Using WSRPC with Titan and Protocol Buffers
 
 So let's set up a service that creates vertices of type ``Person`` in Titan:db. Since we will be using Protocol Buffers for serialization, let's define a simple message type person in a `.proto` file called `titan.proto`:
 
@@ -321,3 +327,5 @@ $ python titan_client.py
 ```
 
 That's it! These are really basic examples, but they can be as complex as needed...
+
+Node.js client example coming soon...
