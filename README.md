@@ -1,8 +1,8 @@
 ## WebSocket RPC w/Google Protocol Buffers (proto3)
 
-This example demonstrates how you can use Pulsar to create a websocket based streaming RPC service and proxy that is easy to integrate with data serialized to bytes e.g. Google Protocol Buffers.
+This example demonstrates how you can use Pulsar to create a websocket based streaming RPC service and proxy that is easy to integrate with data serialized to bytes e.g., Google Protocol Buffers.
 
-Install protobuf:
+Install Google Protocol Buffers:
 
 ```
 $ wget https://github.com/google/protobuf/releases/download/v3.0.0-beta-2/protobuf-python-3.0.0-beta-2.tar.gz
@@ -22,7 +22,7 @@ $ protoc --version
 ```
 If you get a weird error, you may need to run
 ```
-sudo ldconfig
+$ sudo ldconfig
 ```
 Phew, good to go, now...
 
@@ -39,7 +39,7 @@ $ git clone https://github.com/davebshow/zrpc.git
 $ cd zrpc
 ```
 
-Ok. Pulsar gives you the components to easily build and WebSocket RPC handler. Here is a simple [example](https://github.com/davebshow/zrpc/blob/master/wsrpc.py):
+Ok. Pulsar gives you the components to easily build and WebSocket RPC handler. Here is a simple [example](https://github.com/davebshow/zrpc/blob/master/wsrpc.py#L78):
 
 ```python
 class WSRPC(rpc.handlers.RpcHandler, ws.WS):
@@ -85,14 +85,14 @@ class EchoRPC(WSRPC):
 def server():
     wm = ws.WebSocket('/', EchoRPC())
     app = wsgi.WsgiHandler(middleware=[wm])
-    wsgi.WSGIServer(callable=app).start()
+    return wsgi.WSGIServer(callable=app)
 
 
 if __name__ == "__main__":
     server().start()
 ```
 
-This service can be called from any websocket client implementation in any language. Python clients can use the ``WSRCPProxy`` to call the rpc methods. Underneath, the proxy uses the ``aiohttp`` to communicate with the server, because Pulsar doesn't include as websocket client out of the box:
+This service can be called from any websocket client implementation in any language. Python clients can use the [``WSRCPProxy``](https://github.com/davebshow/zrpc/blob/master/wsrpc.py#L38) to call the rpc methods. Underneath, the proxy uses the ``aiohttp`` to communicate with the server, because Pulsar doesn't include as websocket client out of the box:
 
 ```python
 import asyncio
@@ -106,11 +106,13 @@ def client():
     # WSRPC methods accept any binary blob
     client = yield from proxy.echo(b"world")
     try:
+        # Basic websocket read pattern...
         while True:
             resp = yield from client.receive()
             print(resp.data)
             if resp.data == "CLOSE":
                 break
+    # Clean up
     finally:
         yield from client.close()
         yield from proxy.session.close()
@@ -139,7 +141,7 @@ $ python echo_client.py
 
 ### Using WSRPC with Protocol Buffers
 
-So let's set up a service that creates vertices of type Person in Titan:db. Since we will be using Protocol Buffers for serialization, let's define a simple message type person in a .proto file called titan.proto:
+So let's set up a service that creates vertices of type ``Person`` in Titan:db. Since we will be using Protocol Buffers for serialization, let's define a simple message type person in a `.proto` file called `titan.proto`:
 
 ```
 syntax = "proto3";
@@ -161,7 +163,7 @@ $ protoc --python_out=proto/ titan.proto
 
 The file it generates is called `titan_pb2`, which is misleading. Upon checking the [source](https://github.com/davebshow/zrpc/blob/master/proto/titan_pb2.py) though, you can see it is indeed using the proto3 syntax.
 
-Next we will define a WSRP Handler that creates a ``Person``, and then creates several more while streaming the results back for effect. We then use ``Pulsar``'s built in websocket middleware and WSGI server (with some simple, ``goblin`` specific, hooks):
+Next we will define a WSRPC Handler that creates a ``Person``, and then creates several more while streaming the results back for effect. We then we serve using a WSGI server with some simple ``goblin`` specific hooks:
 
 ```python
 import asyncio

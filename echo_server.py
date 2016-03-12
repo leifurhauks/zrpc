@@ -17,7 +17,7 @@ class EchoRPC(WSRPC):
 def server():
     wm = ws.WebSocket('/', EchoRPC())
     app = wsgi.WsgiHandler(middleware=[wm])
-    wsgi.WSGIServer(callable=app).start()
+    return wsgi.WSGIServer(callable=app)
 
 
 if __name__ == "__main__":
