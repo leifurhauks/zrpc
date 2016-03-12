@@ -1,7 +1,4 @@
 import asyncio
-import struct
-
-import aiohttp
 
 from wsrpc import WSRPCProxy
 
