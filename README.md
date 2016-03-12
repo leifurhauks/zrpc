@@ -46,6 +46,16 @@ $ cd zrpc
 Ok. Pulsar gives you the components to easily build and WebSocket RPC handler. Here is a simple [example](https://github.com/davebshow/zrpc/blob/master/wsrpc.py#L78):
 
 ```python
+import asyncio
+import struct
+
+import aiohttp
+
+from pulsar import as_coroutine, ensure_future
+from pulsar.apps import rpc, ws
+from pulsar.apps.wsgi.utils import LOGGER
+
+
 class WSRPC(rpc.handlers.RpcHandler, ws.WS):
 
     def on_bytes(self, websocket, body):
