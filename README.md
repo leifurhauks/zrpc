@@ -370,7 +370,7 @@ var WebSocketClient = require('websocket').client;
 function Client () {
 
   if (!(this instanceof Client))
-      return new Client(source);
+      return new Client();
 
   this.client = new WebSocketClient();
 }
