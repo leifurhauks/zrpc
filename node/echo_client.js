@@ -21,7 +21,6 @@ Client.prototype.rpc_method = function (url, method, blob) {
 
   this.client.on('connect', function(connection) {
       console.log('WebSocket Client Connected');
-      console.log(method.length, blob.length)
       var fmt_str = util.format("<I%ds%ds", method.length, blob.length)
       var buff = bufferpack.pack(fmt_str, [method.length, method, blob])
       connection.sendBytes(buff)
