@@ -13,6 +13,7 @@ class EchoRPC(WSRPC):
             websocket.write(blob)
         websocket.write_close()
 
+
 def server():
     wm = ws.WebSocket('/', EchoRPC())
     app = wsgi.WsgiHandler(middleware=[wm])

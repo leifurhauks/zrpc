@@ -47,7 +47,7 @@ Finally, clone this repo and navigate to the root so you can run the examples:
 
 ```
 $ git clone https://github.com/davebshow/zrpc.git
-$ cd zrpc
+$ cd zrpc/
 ```
 
 ### WSRPC
@@ -160,7 +160,7 @@ $ python echo_server.py
 Then open a new terminal and navigate to the zrpc root and run the client:
 
 ```
-$ cd zrpc
+$ cd zrpc/
 $ python echo_client.py
 ```
 
@@ -341,7 +341,7 @@ $ python titan_server.py
 Then open a new terminal and navigate to the zrpc root and run the client:
 
 ```
-$ cd zrpc
+$ cd zrpc/
 $ python titan_client.py
 ```
 
@@ -354,4 +354,70 @@ $ ./bin/titan.sh stop
 
 That's it! These are really basic examples, but they can be as complex as needed...
 
-Node.js client example coming soon...
+Example Node.js echo client:
+
+```
+$ npm install websocket bufferpack
+```
+
+```javascript
+var util = require('util')
+
+var bufferpack = require('bufferpack');
+var WebSocketClient = require('websocket').client;
+
+
+function Client () {
+
+  if (!(this instanceof Client))
+      return new Client(source);
+
+  this.client = new WebSocketClient();
+}
+
+
+Client.prototype.rpc_method = function (url, method, blob) {
+
+  this.client.on('connectFailed', function(error) {
+      console.log('Connect Error: ' + error.toString());
+  });
+
+  this.client.on('connect', function(connection) {
+      console.log('WebSocket Client Connected');
+      console.log(method.length, blob.length)
+      var fmt_str = util.format("<I%ds%ds", method.length, blob.length)
+      var buff = bufferpack.pack(fmt_str, [method.length, method, blob])
+      connection.sendBytes(buff)
+      connection.on('error', function(error) {
+          console.log("Connection Error: " + error.toString());
+      });
+      connection.on('close', function() {
+          console.log('echo-protocol Connection Closed');
+      });
+      connection.on('message', function(message) {
+          if (message.type === 'binary') {
+              console.log(message.binaryData.toString('utf-8'));
+          }
+      });
+  });
+
+
+  this.client.connect(url);
+}
+
+var client = new Client();
+client.rpc_method('http://127.0.0.1:8060', 'echo', 'javascript')
+```
+
+To run this example, start the server:
+
+```
+$ python echo_server.py
+```
+
+Then open a new terminal and navigate to `zrpc/node/` and run the client:
+
+```
+$ cd zrpc/node/
+$ node echo_client.js
+```
