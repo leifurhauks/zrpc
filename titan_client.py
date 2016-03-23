@@ -20,7 +20,9 @@ def main():
             resp = yield from client.receive()
             if resp.tp == aiohttp.MsgType.close:
                 break
-            print(resp.data)
+            person = titan_pb2.Person()
+            person.ParseFromString(resp.data)
+            print(person)
     finally:
         yield from client.close()
         yield from proxy.session.close()

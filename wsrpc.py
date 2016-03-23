@@ -66,7 +66,7 @@ class WSRPCProxy(AsyncObject):
     def __getattr__(self, name):
         return WSCall(self, name)
 
-    def _call(self, name, blob):
+    def _call(self, name, blob=b""):
         method = name.encode("utf-8")
         data = struct.pack(
             "@I%ds%ds" % (len(method), len(blob)), len(method), method, blob)
