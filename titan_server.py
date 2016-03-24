@@ -155,7 +155,6 @@ class Goblin(pulsar.Application):
         except asyncio.QueueEmpty:
             LOGGER.info("No tasks available :( :( :(")
         else:
-            queue = self.response_queues[request_id]
             resp = yield from task
             if isinstance(resp, gremlinclient.connection.Stream):
                 # Farm out the processing to the worker process that
