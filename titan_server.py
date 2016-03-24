@@ -67,14 +67,32 @@ def read_response(request, resp_id):
 # read from queues etc.
 @pulsar.command(ack=True)
 @asyncio.coroutine
-def process_task(request):
+def process_task(request, aid):
     self = request.actor.app
-    yield from self.process_task()
+    yield from self.process_task(aid)
+
+
+@pulsar.command(ack=True)
+@asyncio.coroutine
+def enqueue_response(request, request_id, response):
+    LOGGER.info("Enqueued by monitor: {}\naid: {}".format(
+        request.actor.is_monitor(), request.actor.aid))
+    self = request.actor.app
+    yield from self.response_queues[request_id].put(response)
+
+
+@pulsar.command(ack=True)
+@asyncio.coroutine
+def process_response(request, request_id, response):
+    LOGGER.info("Processed by monitor: {}\naid: {}".format(
+        request.actor.is_monitor(), request.actor.aid))
+    LOGGER.info("RESP: {}".format(response))
+    request.actor.send('monitor', 'enqueue_response', request_id, response)
 
 
 class Goblin(pulsar.Application):
 
-    cfg = pulsar.Config(workers=1)
+    cfg = pulsar.Config(workers=2)
 
     def monitor_start(self, monitor):
         """Setup message queues. Setup goblin"""
@@ -113,6 +131,7 @@ class Goblin(pulsar.Application):
     def worker_start(self, worker, exc=None):
         """Worker starts prompting the monitor to process tasks and pass them
            off for post processing..."""
+        LOGGER.info("NAAAAAAAAAAAAAAAAAAAAAme: {}".format(worker.aid))
         self._loop = worker._loop
         # check the queue periodically for tasks...
         self._loop.call_later(1, self.start_working, worker)
@@ -128,13 +147,13 @@ class Goblin(pulsar.Application):
            response queue."""
         # Tell the monitor to dequeue and iterate task
         # If the monitor has no tasks to process, it returns None
-        pulsar.ensure_future(worker.send(worker.monitor, 'process_task'))
+        pulsar.ensure_future(worker.send(worker.monitor, 'process_task', worker.aid))
         worker._loop.call_later(1, self.start_working, worker)
 
     @asyncio.coroutine
-    def process_task(self):
-        """Check for tasks, if available, begin streaming results to a response
-           queue...."""
+    def process_task(self, aid):
+        """Check for tasks, if available, pass results to calling worker,
+            worker pushes responses into queue...."""
         try:
             request_id, task = self.incoming_queue.get_nowait()
         except asyncio.QueueEmpty:
@@ -143,18 +162,28 @@ class Goblin(pulsar.Application):
             queue = self.response_queues[request_id]
             resp = yield from task
             if isinstance(resp, gremlinclient.connection.Stream):
+                # Farm out the processing to the worker process that
+                # called the process task command
                 while True:
                     msg = yield from resp.read()
-                    yield from queue.put(msg)
+                    yield from pulsar.send(
+                        aid, 'process_response', request_id, resp)
                     if msg is None:
                         break
             else:
-                yield from queue.put("hello")
+                # Farm out the processing to the worker process that
+                # called the process task command
+                yield from pulsar.send(
+                    aid, 'process_response', request_id, "hello")
                 yield from asyncio.sleep(1)
-                yield from queue.put("world")
+                yield from pulsar.send(
+                    aid, 'process_response', request_id, "world")
                 yield from asyncio.sleep(1)
-                yield from queue.put(resp)
-                yield from queue.put(None)
+                yield from pulsar.send(
+                    aid, 'process_response', request_id, resp)
+                yield from asyncio.sleep(1)
+                yield from pulsar.send(
+                    aid, 'process_response', request_id, None)
 
 
 class CreatorRPC(WSRPC):
