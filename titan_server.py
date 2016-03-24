@@ -20,6 +20,7 @@ from wsrpc import WSRPC
 @pulsar.command(ack=True)
 @asyncio.coroutine
 def create_person(request, blob):
+    """This add a create person task to the incoming task queue"""
     self = request.actor.app
     # Build goblin object from blob
     request_id = str(uuid.uuid4())
@@ -28,27 +29,8 @@ def create_person(request, blob):
     name = person.name
     email = person.email
     url = person.url
-
-    @asyncio.coroutine
-    def task():
-        # Task needs to return a string, so they response can go to the
-        # calling worker for postprocessing.
-        # Maybe goblin would benefit from sometime returning a raw Server
-        # response that could later be dealt with...the worker could then
-        # take care of parsing and creating a protobuf blob
-        resp = yield from Person().create(
+    task = Person().create(
             name=name, email=email, url=url, request_id=request_id)
-        LOGGER.info("Created node: {}".format(resp))
-        new_person = titan_pb2.Person()
-        new_person.name = resp.name
-        new_person.url = resp.url
-        new_person.email = resp.email
-        new_person.id = resp.id
-        new_person.label = resp.get_label()
-        blob = new_person.SerializeToString()
-        return blob
-
-    task = pulsar.ensure_future(task())
     # This is only goblin app api method that needs to be exposed
     yield from self.add_task(request_id, task)
     return request_id
@@ -57,9 +39,10 @@ def create_person(request, blob):
 # Generic `API` commands
 @pulsar.command(ack=True)
 @asyncio.coroutine
-def read_response(request, resp_id):
+def read_response(request, request_id):
+    """Called by rpc service to stream incoming results"""
     self = request.actor.app
-    blob = yield from self.read_response(resp_id)
+    blob = yield from self.read_response(request_id)
     return blob
 
 
@@ -68,6 +51,8 @@ def read_response(request, resp_id):
 @pulsar.command(ack=True)
 @asyncio.coroutine
 def process_task(request, aid):
+    """This asks the monitor to make a call and pass of the result handling
+       to a worker."""
     self = request.actor.app
     yield from self.process_task(aid)
 
@@ -75,6 +60,7 @@ def process_task(request, aid):
 @pulsar.command(ack=True)
 @asyncio.coroutine
 def enqueue_response(request, request_id, response):
+    """Put a response on the response queue to be read by the rpc service"""
     LOGGER.info("Enqueued by monitor: {}\naid: {}".format(
         request.actor.is_monitor(), request.actor.aid))
     self = request.actor.app
@@ -84,9 +70,20 @@ def enqueue_response(request, request_id, response):
 @pulsar.command(ack=True)
 @asyncio.coroutine
 def process_response(request, request_id, response):
+    """This is where we serialize and pass to the response queue"""
     LOGGER.info("Processed by monitor: {}\naid: {}".format(
         request.actor.is_monitor(), request.actor.aid))
     LOGGER.info("RESP: {}".format(response))
+    # This is because we send some random strings and of course a None
+    if not isinstance(response, str) and response:
+        # Can we do some kind of generic mapper here to avoid specifics here????
+        person = titan_pb2.Person()
+        person.name = response.name
+        person.url = response.url
+        person.email = response.email
+        person.id = response.id
+        person.label = response.get_label()
+        response = person.SerializeToString()
     request.actor.send('monitor', 'enqueue_response', request_id, response)
 
 
@@ -131,7 +128,6 @@ class Goblin(pulsar.Application):
     def worker_start(self, worker, exc=None):
         """Worker starts prompting the monitor to process tasks and pass them
            off for post processing..."""
-        LOGGER.info("NAAAAAAAAAAAAAAAAAAAAAme: {}".format(worker.aid))
         self._loop = worker._loop
         # check the queue periodically for tasks...
         self._loop.call_later(1, self.start_working, worker)
@@ -196,7 +192,6 @@ class CreatorRPC(WSRPC):
                 'goblin_server', 'read_response', request_id)
             if blob is None:
                 break
-            LOGGER.info("Created outgoing blob: {}".format(blob))
             websocket.write(blob)
         websocket.write_close()
 
