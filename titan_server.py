@@ -69,17 +69,7 @@ def read_response(request, resp_id):
 @asyncio.coroutine
 def process_task(request):
     self = request.actor.app
-    return (yield from self.process_task())
-
-
-@pulsar.command(ack=True)
-@asyncio.coroutine
-def read_processing_queue(request):
-    self = request.actor.app
-    LOGGER.info("reading processing queue...")
-    res = yield from self.read_processing_queue()
-    LOGGER.info("reading processing queue...Result: {}".format(res))
-    return res
+    yield from self.process_task()
 
 
 class Goblin(pulsar.Application):
@@ -136,7 +126,7 @@ class Goblin(pulsar.Application):
         """Try to get tasks from the monitor. Prompt processing, read from
            streaming results. Push read for client results into the appropriate
            response queue."""
-        # Tell the monitor to deque and iterate task
+        # Tell the monitor to dequeue and iterate task
         # If the monitor has no tasks to process, it returns None
         pulsar.ensure_future(worker.send(worker.monitor, 'process_task'))
         worker._loop.call_later(1, self.start_working, worker)
@@ -149,11 +139,9 @@ class Goblin(pulsar.Application):
             request_id, task = self.incoming_queue.get_nowait()
         except asyncio.QueueEmpty:
             LOGGER.info("No tasks available :( :( :(")
-            pass
         else:
             queue = self.response_queues[request_id]
             resp = yield from task
-            LOGGER.info("RESP 2: {}".format(resp))
             if isinstance(resp, gremlinclient.connection.Stream):
                 while True:
                     msg = yield from resp.read()
@@ -162,7 +150,9 @@ class Goblin(pulsar.Application):
                         break
             else:
                 yield from queue.put("hello")
+                yield from asyncio.sleep(1)
                 yield from queue.put("world")
+                yield from asyncio.sleep(1)
                 yield from queue.put(resp)
                 yield from queue.put(None)
 
