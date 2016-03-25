@@ -50,7 +50,7 @@ command_map = {
 @pulsar.command(ack=True)
 @asyncio.coroutine
 def add_task(request, method, blob):
-    """Add the data from the rpc to the incoming task queue"""
+    """Called by the rpc service to add data to the incoming task queue"""
     self = request.actor.app
     request_id = str(uuid.uuid4())
     yield from self.add_task(request_id, method, blob)
@@ -60,7 +60,7 @@ def add_task(request, method, blob):
 @pulsar.command(ack=True)
 @asyncio.coroutine
 def read_response(request, request_id):
-    """Called by rpc service to stream incoming results"""
+    """Called by rpc service to stream results from the goblin app"""
     self = request.actor.app
     blob = yield from self.read_response(request_id)
     return blob
@@ -71,8 +71,8 @@ def read_response(request, request_id):
 @pulsar.command(ack=True)
 @asyncio.coroutine
 def get_task(request):
-    """Called by worker process to try to get a task from the monitor
-       controlled main incoming task queue"""
+    """Called by worker process to try to get a task from the main incoming
+       task queue (runs in monitor context)"""
     self = request.actor.app
     return self.get_task()
 
@@ -81,7 +81,7 @@ def get_task(request):
 @asyncio.coroutine
 def enqueue_response(request, request_id, response):
     """Called by a worker to put a response on the monitor controlled response
-       queue to be read by the rpc service"""
+       queue (to be read by the rpc service calling read_response)"""
     LOGGER.info("Enqueued by monitor: {}\naid: {}".format(
         request.actor.is_monitor(), request.actor.aid))
     LOGGER.info(response)
@@ -92,9 +92,9 @@ def enqueue_response(request, request_id, response):
 @pulsar.command(ack=True)
 @asyncio.coroutine
 def process_task(request, request_id, method, blob):
-    """This implements streaming task processing using user defined
-       functions to perform tasks like serialization. Enqueues processed tasks
-       response on the monitor controlled response_queues"""
+    """This implements streaming data processing using user defined
+       functions to perform tasks like serialization/parsing. Enqueues
+       processed responses on the monitor controlled response_queues"""
     LOGGER.info("Processed by monitor: {}\naid: {}".format(
         request.actor.is_monitor(), request.actor.aid))
     # Simple example. This will have to be more carefully handled
@@ -144,7 +144,7 @@ class Goblin(pulsar.Application):
     cfg = pulsar.Config(workers=2)
 
     def monitor_start(self, monitor):
-        """Setup message queues. Setup goblin"""
+        """Setup message queues"""
         # This lives in the monitor context
         # Queue incoming messages from rpc service
         self.incoming_queue = asyncio.Queue(maxsize=250)
@@ -152,15 +152,16 @@ class Goblin(pulsar.Application):
         # by the rpc service
         self.response_queues = {}
 
+    @asyncio.coroutine
     def add_task(self, request_id, method, blob):
-        """Add a task to the incoming task queue"""
+        """Adzd a task to the incoming task queue"""
         self.response_queues[request_id] = asyncio.Queue()
         yield from self.incoming_queue.put((request_id, method, blob))
 
     @asyncio.coroutine
     def read_response(self, request_id):
         """This method allows the rpc service to read from the response queues
-            maintained by the app."""
+           maintained by the app."""
         try:
             queue = self.response_queues[request_id]
         except KeyError:
@@ -176,7 +177,8 @@ class Goblin(pulsar.Application):
            for tasks..."""
         worker.pool = aiohttp_client.Pool("ws://localhost:8182",
                                           future_class=asyncio.Future,
-                                          loop=worker._loop)
+                                          loop=worker._loop,
+                                          force_release=True)
         # check the queue periodically for tasks...
         worker._loop.call_soon(self.start_working, worker)
 
