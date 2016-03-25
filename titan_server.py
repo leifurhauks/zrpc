@@ -210,7 +210,7 @@ class Goblin(pulsar.Application):
             return request_id, method, blob
 
 
-class CreatorRPC(WSRPC):
+class TitanRPC(WSRPC):
 
     def rpc_dispatch(self, websocket, method, blob):
         """A generic dispatch function that sends commands to the
@@ -230,7 +230,7 @@ class TitanRPCSite(wsgi.LazyWsgi):
     """Handler for the RPCServer"""
 
     def setup(self, environ):
-        wm = ws.WebSocket('/', CreatorRPC())
+        wm = ws.WebSocket('/', TitanRPC())
         return wsgi.WsgiHandler(middleware=[wm], async=True)
 
 
