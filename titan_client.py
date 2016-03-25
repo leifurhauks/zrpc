@@ -14,7 +14,7 @@ def main():
     person.email = "jon@jon.com"
     person.url = "https://jon.com/"
     blob = person.SerializeToString()
-    client = yield from proxy.create_person(blob)
+    client = yield from proxy.dispatch.create_person(blob)
     try:
         while True:
             resp = yield from client.receive()

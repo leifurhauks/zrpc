@@ -12,31 +12,50 @@ from proto import titan_pb2
 from wsrpc import WSRPC
 
 
-# All commands run in the Monitor/Arbiter context
-# This allows us to manage central messaging queues
-# The can be accessed by workers using the internal app commands (below)
-
-# User defined rpc commands
-@pulsar.command(ack=True)
+# Simple example. This will have to be more carefully handled -
+# mananging serializer names etc....
 @asyncio.coroutine
-def create_person(request, blob):
-    """This add a create person task to the incoming task queue"""
-    self = request.actor.app
-    # Build goblin object from blob
-    request_id = str(uuid.uuid4())
+def create_person(request_id, blob):
     person = titan_pb2.Person()
     person.ParseFromString(blob)
     name = person.name
     email = person.email
     url = person.url
-    task = Person().create(
+    person = yield from Person().create(
             name=name, email=email, url=url, request_id=request_id)
-    # This is only goblin app api method that needs to be exposed
-    yield from self.add_task(request_id, task)
+    return person
+
+
+def serialize_person(response):
+    try:
+        person = titan_pb2.Person()
+        person.name = response.name
+        person.url = response.url
+        person.email = response.email
+        person.id = response.id
+        person.label = response.get_label()
+        response = person.SerializeToString()
+    finally:
+        return response
+
+
+# Simple example. This will have to be more carefully handled.
+command_map = {
+    "create_person": create_person,
+    "serialize_person": serialize_person}
+
+
+# `API` commands
+@pulsar.command(ack=True)
+@asyncio.coroutine
+def add_task(request, method, blob):
+    """Add the data from the rpc to the incoming task queue"""
+    self = request.actor.app
+    request_id = str(uuid.uuid4())
+    yield from self.add_task(request_id, method, blob)
     return request_id
 
 
-# Generic `API` commands
 @pulsar.command(ack=True)
 @asyncio.coroutine
 def read_response(request, request_id):
@@ -50,41 +69,72 @@ def read_response(request, request_id):
 # read from queues etc.
 @pulsar.command(ack=True)
 @asyncio.coroutine
-def process_task(request, aid):
-    """This asks the monitor to make a call and pass of the result handling
-       to a worker."""
+def get_task(request):
+    """Called by worker process to try to get a task from the monitor
+       controlled main incoming task queue"""
     self = request.actor.app
-    yield from self.process_task(aid)
+    return self.get_task()
 
 
 @pulsar.command(ack=True)
 @asyncio.coroutine
 def enqueue_response(request, request_id, response):
-    """Put a response on the response queue to be read by the rpc service"""
+    """Called by a worker to put a response on the monitor controlled response
+       queue to be read by the rpc service"""
     LOGGER.info("Enqueued by monitor: {}\naid: {}".format(
         request.actor.is_monitor(), request.actor.aid))
+    LOGGER.info(response)
     self = request.actor.app
     yield from self.response_queues[request_id].put(response)
 
 
 @pulsar.command(ack=True)
 @asyncio.coroutine
-def process_response(request, request_id, response):
-    """This is where we serialize and pass to the response queue"""
+def process_task(request, request_id, method, blob):
+    """This implements streaming task processing using user defined
+       functions to perform tasks like serialization. Enqueues processed tasks
+       response on the monitor controlled response_queues"""
     LOGGER.info("Processed by monitor: {}\naid: {}".format(
         request.actor.is_monitor(), request.actor.aid))
-    LOGGER.info("RESP: {}".format(response))
-    # This is because we send some random strings and of course a None
-    if not isinstance(response, str) and response:
-        # Can we do some kind of generic mapper here to avoid specifics here????
-        person = titan_pb2.Person()
-        person.name = response.name
-        person.url = response.url
-        person.email = response.email
-        person.id = response.id
-        person.label = response.get_label()
-        response = person.SerializeToString()
-    request.actor.send('monitor', 'enqueue_response', request_id, response)
+    # Simple example. This will have to be more carefully handled
+    serializer = "serialize_{}".format(method.split('_')[-1])
+    try:
+        resp = yield from command_map[method](request_id, blob)
+    except KeyError:
+        raise KeyError("Unknown command issued")
+    else:
+        if isinstance(resp, gremlinclient.connection.Stream):
+            while True:
+                msg = yield from resp.read()
+                if msg:
+                    msg = command_map[serializer](msg)
+                yield from request.actor.send(
+                    'monitor', 'enqueue_response', request_id, msg)
+                if msg is None:
+                    break
+        else:
+            try:
+                msg = command_map[serializer](resp)
+            except KeyError:
+                raise KeyError("Unregistered serializer")
+            else:
+                yield from request.actor.send(
+                    'monitor', 'enqueue_response', request_id, msg)
+
+                # Demonstrate streaming
+                yield from asyncio.sleep(1)
+                yield from request.actor.send(
+                    'monitor', 'enqueue_response', request_id, "Hello")
+                yield from asyncio.sleep(1)
+                yield from request.actor.send(
+                    'monitor', 'enqueue_response', request_id, "Streaming")
+                yield from asyncio.sleep(1)
+                yield from request.actor.send(
+                    'monitor', 'enqueue_response', request_id, "World")
+
+                # Message for client to terminate
+                yield from request.actor.send(
+                    'monitor', 'enqueue_response', request_id, None)
 
 
 class Goblin(pulsar.Application):
@@ -99,38 +149,37 @@ class Goblin(pulsar.Application):
         # These queues hold response data that can be asynchronously read
         # by the rpc service
         self.response_queues = {}
-        connection.setup("ws://localhost:8182", pool_class=Pool,
-                         future_class=asyncio.Future, loop=monitor._loop)
 
-    def monitor_stopping(self, monitor):
-        loop = monitor._loop
-        loop.call_soon(pulsar.ensure_future, connection.tear_down())
-
-    def add_task(self, request_id, task):
+    def add_task(self, request_id, method, blob):
         """Add a task to the incoming task queue"""
         self.response_queues[request_id] = asyncio.Queue()
-        yield from self.incoming_queue.put((request_id, task))
+        yield from self.incoming_queue.put((request_id, method, blob))
 
     @asyncio.coroutine
-    def read_response(self, response_id):
+    def read_response(self, request_id):
         """This method allows the rpc service to read from the response queues
             maintained by the app."""
         try:
-            queue = self.response_queues[response_id]
+            queue = self.response_queues[request_id]
         except KeyError:
-            raise KeyError("Bad response_id")
+            raise KeyError("Bad request id")
         else:
             resp = yield from queue.get()
             if resp is None:
-                del self.response_queues[response_id]
+                del self.response_queues[request_id]
             return resp
 
     def worker_start(self, worker, exc=None):
-        """Worker starts prompting the monitor to process tasks and pass them
-           off for post processing..."""
-        self._loop = worker._loop
+        """Setup the global goblin variables, then start asking the monitor
+           for tasks..."""
+        connection.setup("ws://localhost:8182", pool_class=Pool,
+                         future_class=asyncio.Future, loop=worker._loop)
         # check the queue periodically for tasks...
-        self._loop.call_later(1, self.start_working, worker)
+        worker._loop.call_soon(self.start_working, worker)
+
+    def worker_stopping(self, worker, exc=None):
+        """Close the connection pool for this process"""
+        worker._loop.call_soon(pulsar.ensure_future, connection.tear_down())
 
     def start_working(self, worker):
         """Don't be lazy"""
@@ -138,54 +187,36 @@ class Goblin(pulsar.Application):
 
     @asyncio.coroutine
     def run(self, worker):
-        """Try to get tasks from the monitor. Prompt processing, read from
-           streaming results. Push read for client results into the appropriate
-           response queue."""
-        # Tell the monitor to dequeue and iterate task
-        # If the monitor has no tasks to process, it returns None
-        pulsar.ensure_future(worker.send(worker.monitor, 'process_task', worker.aid))
-        worker._loop.call_later(1, self.start_working, worker)
+        """Try to get tasks from the monitor. If tasks are available process
+           using same worker, if not, wait a second, and ask again...
+           BE PERSISTENT!"""
+        request_id, method, blob = yield from worker.send(
+            worker.monitor, 'get_task')
+        if request_id and method  and blob:
+            yield from pulsar.send(
+                worker.aid, 'process_task', request_id, method, blob)
+        else:
+            worker._loop.call_later(1, self.start_working, worker)
 
-    @asyncio.coroutine
-    def process_task(self, aid):
-        """Check for tasks, if available, pass results to calling worker,
-            worker pushes responses into queue...."""
+    def get_task(self):
+        """Check for tasks, if available, pass data to calling worker for
+           processing..."""
         try:
-            request_id, task = self.incoming_queue.get_nowait()
+            request_id, method, blob = self.incoming_queue.get_nowait()
         except asyncio.QueueEmpty:
             LOGGER.info("No tasks available :( :( :(")
+            return None, None, None
         else:
-            resp = yield from task
-            if isinstance(resp, gremlinclient.connection.Stream):
-                # Farm out the processing to the worker process that
-                # called the process task command
-                while True:
-                    msg = yield from resp.read()
-                    yield from pulsar.send(
-                        aid, 'process_response', request_id, resp)
-                    if msg is None:
-                        break
-            else:
-                # Farm out the processing to the worker process that
-                # called the process task command
-                yield from pulsar.send(
-                    aid, 'process_response', request_id, "hello")
-                yield from asyncio.sleep(1)
-                yield from pulsar.send(
-                    aid, 'process_response', request_id, "world")
-                yield from asyncio.sleep(1)
-                yield from pulsar.send(
-                    aid, 'process_response', request_id, resp)
-                yield from asyncio.sleep(1)
-                yield from pulsar.send(
-                    aid, 'process_response', request_id, None)
+            return request_id, method, blob
 
 
 class CreatorRPC(WSRPC):
 
-    def rpc_create_person(self, websocket, blob):
+    def rpc_dispatch(self, websocket, method, blob):
+        """A generic dispatch function that sends commands to the
+           Goblin application"""
         request_id = yield from pulsar.send(
-            'goblin_server', 'create_person', blob)
+            'goblin_server', 'add_task', method, blob)
         while True:
             blob = yield from pulsar.send(
                 'goblin_server', 'read_response', request_id)
@@ -197,10 +228,6 @@ class CreatorRPC(WSRPC):
 
 class TitanRPCSite(wsgi.LazyWsgi):
     """Handler for the RPCServer"""
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
 
     def setup(self, environ):
         wm = ws.WebSocket('/', CreatorRPC())

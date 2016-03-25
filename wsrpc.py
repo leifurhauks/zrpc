@@ -5,7 +5,6 @@ import aiohttp
 
 from pulsar import as_coroutine, ensure_future, AsyncObject
 from pulsar.apps import rpc, ws
-from pulsar.apps.wsgi.utils import LOGGER
 
 
 class WSCall:
@@ -28,7 +27,7 @@ class WSCall:
         return self._name
 
     def __getattr__(self, name):
-        name = "%s%s%s" % (self._name, name)
+        name = "%s.%s" % (self._name, name)
         return self.__class__(self._client, name)
 
     def __call__(self, *args, **kwargs):
@@ -89,7 +88,10 @@ class WSRPC(rpc.handlers.RpcHandler, ws.WS):
     def _call(self, websocket, body):
         # Process subprotocol
         (i, ), data = struct.unpack("I", body[:4]), body[4:]
-        method, blob = data[:i], data[i:]
-        LOGGER.info("method: {}\nblob: {}".format(method, blob))
-        proc = self.get_handler(method.decode('utf-8'))
-        yield from as_coroutine(proc(websocket, blob))
+        methods, blob = data[:i], data[i:]
+        methods = methods.decode("utf-8").split(".")
+        method = methods[0]
+        proc = self.get_handler(method)
+        if len(methods) > 1:
+            method = methods[1]
+        yield from as_coroutine(proc(websocket, method, blob))
