@@ -4,9 +4,7 @@ import pulsar
 from pulsar import get_actor
 from pulsar.apps import wsgi, ws
 from pulsar.apps.wsgi.utils import LOGGER
-import gremlinclient
-from gremlinclient.aiohttp_client import Pool
-from goblin import connection
+from gremlinclient import aiohttp_client, connection
 from models import Person
 from proto import titan_pb2
 from wsrpc import WSRPC
@@ -15,15 +13,18 @@ from wsrpc import WSRPC
 # Simple example. This will have to be more carefully handled -
 # mananging serializer names etc....
 @asyncio.coroutine
-def create_person(request_id, blob):
+def create_person(request_id, blob, pool):
     person = titan_pb2.Person()
     person.ParseFromString(blob)
     name = person.name
     email = person.email
     url = person.url
-    person = yield from Person().create(
-            name=name, email=email, url=url, request_id=request_id)
-    return person
+    return (yield from Person().create(name=name,
+                                       email=email,
+                                       url=url,
+                                       request_id=request_id,
+                                       pool=pool,
+                                       future_class=asyncio.Future))
 
 
 def serialize_person(response):
@@ -97,13 +98,14 @@ def process_task(request, request_id, method, blob):
     LOGGER.info("Processed by monitor: {}\naid: {}".format(
         request.actor.is_monitor(), request.actor.aid))
     # Simple example. This will have to be more carefully handled
+    pool = request.actor.pool
     serializer = "serialize_{}".format(method.split('_')[-1])
     try:
-        resp = yield from command_map[method](request_id, blob)
+        resp = yield from command_map[method](request_id, blob, pool)
     except KeyError:
         raise KeyError("Unknown command issued")
     else:
-        if isinstance(resp, gremlinclient.connection.Stream):
+        if isinstance(resp, connection.Stream):
             while True:
                 msg = yield from resp.read()
                 if msg:
@@ -172,14 +174,15 @@ class Goblin(pulsar.Application):
     def worker_start(self, worker, exc=None):
         """Setup the global goblin variables, then start asking the monitor
            for tasks..."""
-        connection.setup("ws://localhost:8182", pool_class=Pool,
-                         future_class=asyncio.Future, loop=worker._loop)
+        worker.pool = aiohttp_client.Pool("ws://localhost:8182",
+                                          future_class=asyncio.Future,
+                                          loop=worker._loop)
         # check the queue periodically for tasks...
         worker._loop.call_soon(self.start_working, worker)
 
     def worker_stopping(self, worker, exc=None):
         """Close the connection pool for this process"""
-        worker._loop.call_soon(pulsar.ensure_future, connection.tear_down())
+        worker._loop.call_soon(pulsar.ensure_future, worker.pool.close())
 
     def start_working(self, worker):
         """Don't be lazy"""
@@ -207,6 +210,10 @@ class Goblin(pulsar.Application):
             return None, None, None
         else:
             return request_id, method, blob
+
+    # def actorparams(self, monitor, params):
+    #     pool = aiohttp_client.Pool()
+    #     params.update({"pool": })
 
 
 class TitanRPC(WSRPC):
