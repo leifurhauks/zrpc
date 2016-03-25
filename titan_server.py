@@ -192,11 +192,10 @@ class Goblin(pulsar.Application):
            BE PERSISTENT!"""
         request_id, method, blob = yield from worker.send(
             worker.monitor, 'get_task')
-        if request_id and method  and blob:
+        if request_id and method and blob:
             yield from pulsar.send(
                 worker.aid, 'process_task', request_id, method, blob)
-        else:
-            worker._loop.call_later(1, self.start_working, worker)
+        worker._loop.call_later(1, self.start_working, worker)
 
     def get_task(self):
         """Check for tasks, if available, pass data to calling worker for
