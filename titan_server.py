@@ -1,4 +1,5 @@
 import asyncio
+import collections
 import uuid
 import pulsar
 from pulsar import get_actor
@@ -13,37 +14,42 @@ from wsrpc import WSRPC
 # Simple example. This will have to be more carefully handled -
 # mananging serializer names etc....
 @asyncio.coroutine
-def create_person(request_id, blob, pool):
-    person = titan_pb2.Person()
-    person.ParseFromString(blob)
+def create_person(person, context):
     name = person.name
     email = person.email
     url = person.url
-    return (yield from Person().create(name=name,
-                                       email=email,
-                                       url=url,
-                                       request_id=request_id,
-                                       pool=pool,
-                                       future_class=asyncio.Future))
+    goblin_person = yield from Person().create(name=name,
+                                               email=email,
+                                               url=url,
+                                               request_id=context.request_id,
+                                               pool=context.pool,
+                                               future_class=asyncio.Future)
+    return goblin_to_pb_person(goblin_person)
 
 
-def serialize_person(response):
-    try:
-        person = titan_pb2.Person()
-        person.name = response.name
-        person.url = response.url
-        person.email = response.email
-        person.id = response.id
-        person.label = response.get_label()
-        response = person.SerializeToString()
-    finally:
-        return response
+def goblin_to_pb_person(goblin_person):
+    return titan_pb2.Person(
+        name=goblin_person.name,
+        url=goblin_person.url,
+        email=goblin_person.email,
+        id=goblin_person.id,
+        label=goblin_person.get_label()
+    )
 
+
+ServerMethodSpecification = collections.namedtuple(
+    'ServerMethodSpecification',
+    ('implementation', 'request_deserializer', 'response_serializer'))
 
 # Simple example. This will have to be more carefully handled.
 command_map = {
-    "create_person": create_person,
-    "serialize_person": serialize_person}
+    "create_person": ServerMethodSpecification(
+        create_person,
+        titan_pb2.Person.FromString,
+        titan_pb2.Person.SerializeToString
+    ),
+    # "serialize_person": serialize_person
+}
 
 
 # `API` commands
@@ -66,7 +72,7 @@ def read_response(request, request_id):
     return blob
 
 
-#Internal app commands - how workers communicate with the monitor process
+# Internal app commands - how workers communicate with the monitor process
 # read from queues etc.
 @pulsar.command(ack=True)
 @asyncio.coroutine
@@ -99,13 +105,15 @@ def process_task(request, request_id, method, blob):
         request.actor.is_monitor(), request.actor.aid))
     # Simple example. This will have to be more carefully handled
     pool = request.actor.pool
-    serializer = "serialize_{}".format(method.split('_')[-1])
+    method_specification = command_map[method]
     try:
-        resp = yield from command_map[method](request_id, blob, pool)
+        request_data = method_specification.request_deserializer(blob)
+        resp = yield from method_specification.implementation(request_data, RequestContext(request_id, pool))
+
     except KeyError:
         raise KeyError("Unknown command issued")
     else:
-        if isinstance(resp, connection.Stream):
+        if isinstance(resp, connection.Stream):  # TODO: figure out how this fits with the new method spec
             while True:
                 msg = yield from resp.read()
                 if msg:
@@ -115,32 +123,34 @@ def process_task(request, request_id, method, blob):
                 if msg is None:
                     break
         else:
-            try:
-                msg = command_map[serializer](resp)
-            except KeyError:
-                raise KeyError("Unregistered serializer")
-            else:
-                yield from request.actor.send(
-                    'monitor', 'enqueue_response', request_id, msg)
+            msg = method_specification.response_serializer(resp)
 
-                # Demonstrate streaming
-                yield from asyncio.sleep(1)
-                yield from request.actor.send(
-                    'monitor', 'enqueue_response', request_id, "Hello")
-                yield from asyncio.sleep(1)
-                yield from request.actor.send(
-                    'monitor', 'enqueue_response', request_id, "Streaming")
-                yield from asyncio.sleep(1)
-                yield from request.actor.send(
-                    'monitor', 'enqueue_response', request_id, "World")
+            yield from request.actor.send(
+                'monitor', 'enqueue_response', request_id, msg)
 
-                # Message for client to terminate
-                yield from request.actor.send(
-                    'monitor', 'enqueue_response', request_id, None)
+            # Demonstrate streaming
+            yield from asyncio.sleep(1)
+            yield from request.actor.send(
+                'monitor', 'enqueue_response', request_id, "Hello")
+            yield from asyncio.sleep(1)
+            yield from request.actor.send(
+                'monitor', 'enqueue_response', request_id, "Streaming")
+            yield from asyncio.sleep(1)
+            yield from request.actor.send(
+                'monitor', 'enqueue_response', request_id, "World")
+
+            # Message for client to terminate
+            yield from request.actor.send(
+                'monitor', 'enqueue_response', request_id, None)
+
+
+class RequestContext(object):
+    def __init__(self, request_id, pool):
+        self.request_id = request_id
+        self.pool = pool
 
 
 class Goblin(pulsar.Application):
-
     cfg = pulsar.Config(workers=2)
 
     def monitor_start(self, monitor):
@@ -208,18 +218,17 @@ class Goblin(pulsar.Application):
         try:
             request_id, method, blob = self.incoming_queue.get_nowait()
         except asyncio.QueueEmpty:
-            LOGGER.info("No tasks available :( :( :(")
+            LOGGER.debug("No tasks available :( :( :(")
             return None, None, None
         else:
             return request_id, method, blob
 
-    # def actorparams(self, monitor, params):
-    #     pool = aiohttp_client.Pool()
-    #     params.update({"pool": })
+        # def actorparams(self, monitor, params):
+        #     pool = aiohttp_client.Pool()
+        #     params.update({"pool": })
 
 
 class TitanRPC(WSRPC):
-
     def rpc_dispatch(self, websocket, method, blob):
         """A generic dispatch function that sends commands to the
            Goblin application"""
@@ -243,7 +252,6 @@ class TitanRPCSite(wsgi.LazyWsgi):
 
 
 class Server(pulsar.MultiApp):
-
     @asyncio.coroutine
     def build(self):
         yield self.new_app(wsgi.WSGIServer, callable=TitanRPCSite())
